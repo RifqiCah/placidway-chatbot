@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: placidway-knowledge-chatbot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: LLM_PROVIDER
+        value: deepseek
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        value: https://api.deepseek.com
+      - key: LLM_MODEL
+        value: deepseek-flash
+      - key: REFRESH_TOKEN
+        generateValue: true
+
