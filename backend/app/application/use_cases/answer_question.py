@@ -19,6 +19,21 @@ UNKNOWN_ANSWER = (
     "Please contact PlacidWay or request a free quote for a confirmed answer."
 )
 MEDICAL_DISCLAIMER = "This is general website information, not medical advice. Please consult a qualified doctor."
+UNVERIFIED_PRICE_ANSWER = (
+    "I cannot confirm that price because no treatment or package was specified. "
+    "Please name the treatment or package so I can verify its published price, or request a confirmed quote."
+)
+PRICE_TOPIC_TERMS = (
+    "treatment",
+    "therapy",
+    "package",
+    "clinic",
+    "itc",
+    "cancer",
+    "medicine",
+    "pengobatan",
+    "paket",
+)
 
 
 @dataclass(slots=True)
@@ -36,6 +51,13 @@ class AnswerQuestionUseCase:
             return ChatAnswer(conversation_decision.answer, AnswerStatus.ANSWERED, AnswerMode.EXTRACTIVE)
         if safety_decision := self.safety.evaluate(question):
             return ChatAnswer(safety_decision.answer, safety_decision.status, AnswerMode.EXTRACTIVE)
+        if (
+            self._is_price_challenge(question)
+            and not self._contains_price_subject(question)
+            and not self._most_recent_price_context(messages[:-1])
+        ):
+            self.gap_repository.append(question, "price_subject_missing")
+            return ChatAnswer(UNVERIFIED_PRICE_ANSWER, AnswerStatus.UNKNOWN, AnswerMode.EXTRACTIVE)
 
         retrieval_query = self._retrieval_query(messages)
         results = self.retriever.search(retrieval_query, limit=6)
@@ -45,7 +67,7 @@ class AnswerQuestionUseCase:
         evidence = tuple(result.passage for result in results)
         disclaimer = MEDICAL_DISCLAIMER if self._is_medical_topic(question) else None
         if self._is_price_challenge(question):
-            price_guardrail_answer = self._fallback_answer(question, results, disclaimer)
+            price_guardrail_answer = self._fallback_answer(retrieval_query, results, disclaimer)
             if price_guardrail_answer is not None:
                 return price_guardrail_answer
 
@@ -117,8 +139,9 @@ class AnswerQuestionUseCase:
     @classmethod
     def _retrieval_query(cls, messages: tuple[ChatMessage, ...]) -> str:
         latest = messages[-1].content
-        if cls._is_price_challenge(latest) and (price_context := cls._most_recent_price_context(messages[:-1])):
-            return f"{price_context} {latest}"
+        if cls._is_price_challenge(latest):
+            price_context = cls._most_recent_price_context(messages[:-1])
+            return f"{price_context} {latest}" if price_context else latest
         if not cls._is_follow_up(latest):
             return latest
         previous = [message.content for message in messages[:-1] if message.role == "user"][-2:]
@@ -132,28 +155,17 @@ class AnswerQuestionUseCase:
 
     @staticmethod
     def _most_recent_price_context(messages: tuple[ChatMessage, ...]) -> str | None:
-        topic_terms = (
-            "cost",
-            "price",
-            "treatment",
-            "therapy",
-            "package",
-            "clinic",
-            "itc",
-            "cancer",
-            "medicine",
-            "biaya",
-            "harga",
-            "pengobatan",
-            "paket",
-        )
         for message in reversed(messages):
-            if message.role != "user":
-                continue
-            lowered = message.content.casefold()
-            if any(term in lowered for term in topic_terms):
+            if message.role == "user" and AnswerQuestionUseCase._contains_price_subject(message.content):
                 return message.content
+            if message.role == "user":
+                return None
         return None
+
+    @staticmethod
+    def _contains_price_subject(text: str) -> bool:
+        lowered = text.casefold()
+        return any(term in lowered for term in PRICE_TOPIC_TERMS)
 
     @classmethod
     def _should_try_fallback_after_llm_refusal(cls, question: str) -> bool:

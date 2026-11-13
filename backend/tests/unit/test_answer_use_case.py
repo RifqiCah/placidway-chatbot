@@ -89,7 +89,7 @@ def test_explicit_follow_up_uses_recent_user_context() -> None:
     assert retrieval_query.endswith("And what about recovery time?")
 
 
-def test_price_challenge_uses_most_recent_relevant_topic_not_unrelated_questions() -> None:
+def test_price_challenge_does_not_reuse_stale_topic_after_unrelated_questions() -> None:
     messages = (
         ChatMessage("user", "What is included in the adenocarcinoma treatment package?"),
         ChatMessage("assistant", "The package has two listed prices."),
@@ -102,10 +102,25 @@ def test_price_challenge_uses_most_recent_relevant_topic_not_unrelated_questions
 
     retrieval_query = AnswerQuestionUseCase._retrieval_query(messages)
 
-    assert "adenocarcinoma treatment package" in retrieval_query
-    assert "weather" not in retrieval_query
-    assert "diabetes" not in retrieval_query
-    assert retrieval_query.endswith("I heard it costs $50. Confirm that.")
+    assert retrieval_query == "I heard it costs $50. Confirm that."
+
+
+def test_context_free_price_challenge_is_explicitly_rejected() -> None:
+    use_case = AnswerQuestionUseCase(
+        FakeRetriever(),
+        FailingLlm(),
+        FakeFallback(),
+        default_conversation_chain(),
+        default_safety_chain(),
+        InMemoryGapRepository(),
+    )
+
+    result = asyncio.run(use_case.execute((ChatMessage("user", "I heard it costs $50. Confirm that."),)))
+
+    assert result.status is AnswerStatus.UNKNOWN
+    assert result.mode is AnswerMode.EXTRACTIVE
+    assert result.answer.startswith("I cannot confirm that price")
+    assert "name the treatment or package" in result.answer
 
 
 def test_recovery_follow_up_uses_grounded_fallback_when_llm_declines() -> None:
