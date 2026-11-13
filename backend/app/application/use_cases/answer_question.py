@@ -11,6 +11,7 @@ from backend.app.domain.entities.chat import AnswerMode, AnswerStatus, ChatAnswe
 from backend.app.domain.entities.knowledge import Passage, SearchResult
 from backend.app.domain.policies.conversation import ConversationPolicyChain
 from backend.app.domain.policies.safety import SafetyPolicyChain
+from backend.app.domain.value_objects.money import MONEY_PATTERN
 from backend.app.domain.value_objects.query import query_tokens
 
 UNKNOWN_ANSWER = (
@@ -42,9 +43,14 @@ class AnswerQuestionUseCase:
             return self._unknown(question, "low_retrieval_score")
 
         evidence = tuple(result.passage for result in results)
+        disclaimer = MEDICAL_DISCLAIMER if self._is_medical_topic(question) else None
+        if self._is_price_challenge(question):
+            price_guardrail_answer = self._fallback_answer(question, results, disclaimer)
+            if price_guardrail_answer is not None:
+                return price_guardrail_answer
+
         history = "\n".join(f"{message.role}: {message.content}" for message in messages[-6:-1])
         generated = await self.llm.generate(question, history, evidence)
-        disclaimer = MEDICAL_DISCLAIMER if self._is_medical_topic(question) else None
 
         if generated is not None:
             if not generated.is_answerable:
@@ -111,15 +117,48 @@ class AnswerQuestionUseCase:
     @classmethod
     def _retrieval_query(cls, messages: tuple[ChatMessage, ...]) -> str:
         latest = messages[-1].content
+        if cls._is_price_challenge(latest) and (price_context := cls._most_recent_price_context(messages[:-1])):
+            return f"{price_context} {latest}"
         if not cls._is_follow_up(latest):
             return latest
         previous = [message.content for message in messages[:-1] if message.role == "user"][-2:]
         return " ".join([*previous, latest])
 
     @staticmethod
-    def _should_try_fallback_after_llm_refusal(question: str) -> bool:
+    def _is_price_challenge(text: str) -> bool:
+        lowered = text.casefold()
+        challenge_terms = ("confirm", "heard", "really", "correct", "is that", "katanya", "benar")
+        return bool(MONEY_PATTERN.search(text)) and any(term in lowered for term in challenge_terms)
+
+    @staticmethod
+    def _most_recent_price_context(messages: tuple[ChatMessage, ...]) -> str | None:
+        topic_terms = (
+            "cost",
+            "price",
+            "treatment",
+            "therapy",
+            "package",
+            "clinic",
+            "itc",
+            "cancer",
+            "medicine",
+            "biaya",
+            "harga",
+            "pengobatan",
+            "paket",
+        )
+        for message in reversed(messages):
+            if message.role != "user":
+                continue
+            lowered = message.content.casefold()
+            if any(term in lowered for term in topic_terms):
+                return message.content
+        return None
+
+    @classmethod
+    def _should_try_fallback_after_llm_refusal(cls, question: str) -> bool:
         lowered = question.casefold()
-        return "recovery" in lowered or "pemulihan" in lowered
+        return "recovery" in lowered or "pemulihan" in lowered or cls._is_price_challenge(question)
 
     @staticmethod
     def _has_sufficient_evidence(results: tuple[SearchResult, ...], query: str) -> bool:

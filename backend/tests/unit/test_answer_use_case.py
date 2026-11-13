@@ -30,6 +30,13 @@ class UnanswerableLlm:
         return GeneratedAnswer("", (), False)
 
 
+class FailingLlm:
+    is_configured = True
+
+    async def generate(self, question: str, history: str, evidence: tuple[Passage, ...]) -> GeneratedAnswer:
+        raise AssertionError("The deterministic price guardrail must run before the LLM")
+
+
 class FakeFallback:
     def generate(self, question: str, results: tuple[SearchResult, ...]) -> FallbackAnswer:
         return FallbackAnswer("fallback", (PASSAGE,))
@@ -82,6 +89,25 @@ def test_explicit_follow_up_uses_recent_user_context() -> None:
     assert retrieval_query.endswith("And what about recovery time?")
 
 
+def test_price_challenge_uses_most_recent_relevant_topic_not_unrelated_questions() -> None:
+    messages = (
+        ChatMessage("user", "What is included in the adenocarcinoma treatment package?"),
+        ChatMessage("assistant", "The package has two listed prices."),
+        ChatMessage("user", "What is the weather in Cancun?"),
+        ChatMessage("assistant", "That is outside the knowledge base."),
+        ChatMessage("user", "Is this surgery safe for my diabetes?"),
+        ChatMessage("assistant", "Please consult a doctor."),
+        ChatMessage("user", "I heard it costs $50. Confirm that."),
+    )
+
+    retrieval_query = AnswerQuestionUseCase._retrieval_query(messages)
+
+    assert "adenocarcinoma treatment package" in retrieval_query
+    assert "weather" not in retrieval_query
+    assert "diabetes" not in retrieval_query
+    assert retrieval_query.endswith("I heard it costs $50. Confirm that.")
+
+
 def test_recovery_follow_up_uses_grounded_fallback_when_llm_declines() -> None:
     recovery_passage = Passage(
         "recovery",
@@ -123,4 +149,47 @@ def test_recovery_follow_up_uses_grounded_fallback_when_llm_declines() -> None:
     assert result.mode is AnswerMode.EXTRACTIVE
     assert "does not state a recovery duration" in result.answer
     assert result.citations[0].url == "https://example.com/package"
+
+
+def test_price_challenge_uses_grounded_fallback_when_llm_declines() -> None:
+    price_passage = Passage(
+        "price",
+        "clinic-profile",
+        "Clinic profile",
+        "ITC clinic profile",
+        "https://example.com/clinic",
+        "ITC alternative cancer treatment costs start at $18,995 USD for standard multi-week programs.",
+    )
+
+    class PriceRetriever:
+        def search(self, query: str, limit: int = 6) -> tuple[SearchResult, ...]:
+            return (SearchResult(price_passage, 5.0),)
+
+    class PriceFallback:
+        def generate(self, question: str, results: tuple[SearchResult, ...]) -> FallbackAnswer:
+            return FallbackAnswer(
+                "I cannot confirm $50. The supplied page states that treatment costs start at $18,995 USD.",
+                (price_passage,),
+            )
+
+    use_case = AnswerQuestionUseCase(
+        PriceRetriever(),
+        FailingLlm(),
+        PriceFallback(),
+        default_conversation_chain(),
+        default_safety_chain(),
+        InMemoryGapRepository(),
+    )
+    messages = (
+        ChatMessage("user", "How much does alternative cancer treatment cost at ITC?"),
+        ChatMessage("assistant", "The listed price starts at $18,995 USD."),
+        ChatMessage("user", "I heard it costs $50. Confirm that."),
+    )
+
+    result = asyncio.run(use_case.execute(messages))
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.mode is AnswerMode.EXTRACTIVE
+    assert "cannot confirm $50" in result.answer
+    assert result.citations[0].url == "https://example.com/clinic"
 

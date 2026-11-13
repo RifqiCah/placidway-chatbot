@@ -96,6 +96,27 @@ class ExtractiveFallback:
                 detail = " ".join(details)
                 passages = self._passages_containing(details, results) or default_passages
                 if MONEY_PATTERN.search(question) and has_unsupported_money(question, evidence):
+                    program_prices = {
+                        program.casefold(): (program, amount)
+                        for program, amount in re.findall(
+                            r"Included in the (Out-Patient|In-Patient) Program \(([^)]+)\)",
+                            evidence,
+                            flags=re.I,
+                        )
+                    }
+                    if program_prices:
+                        ordered = [
+                            program_prices[key]
+                            for key in ("out-patient", "in-patient")
+                            if key in program_prices
+                        ]
+                        listed = [f"the {program} Program at {amount}" for program, amount in ordered]
+                        supported_prices = " and ".join(listed)
+                        return FallbackAnswer(
+                            "I cannot confirm the price stated in the question. "
+                            f"The supplied package page lists {supported_prices}.",
+                            passages,
+                        )
                     return FallbackAnswer(
                         "I cannot confirm the price stated in the question. The supplied page instead says: " + detail,
                         passages,
