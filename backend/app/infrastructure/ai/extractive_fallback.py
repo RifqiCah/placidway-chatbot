@@ -31,7 +31,12 @@ class ExtractiveFallback:
 
         if "recovery" in lowered or "pemulihan" in lowered:
             matching = [
-                re.sub(r"^\d+\.\s*Why is the treatment period three weeks\?\s*", "", line.strip(), flags=re.I)
+                re.sub(
+                    r"^\d+\.\s*Why is the treatment period three weeks\?\s*",
+                    "",
+                    line.strip(),
+                    flags=re.I,
+                ).strip()
                 for line in evidence.splitlines()
                 if any(
                     term in line.casefold()
