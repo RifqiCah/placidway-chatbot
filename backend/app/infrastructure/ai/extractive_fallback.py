@@ -47,6 +47,13 @@ class ExtractiveFallback:
                     + " These are treatment or follow-up timings, not a guaranteed recovery time.",
                     self._passages_containing(details, results) or default_passages,
                 )
+            if default_passages:
+                return FallbackAnswer(
+                    "The supplied page does not state a specific recovery duration. Treatment-program or "
+                    "follow-up timing should not be interpreted as a guaranteed recovery time. Please ask the "
+                    "clinic for guidance based on the patient's condition.",
+                    default_passages,
+                )
             return FallbackAnswer("", (), is_answerable=False)
 
         if any(term in lowered for term in ("included", "includes", "termasuk", "isi paket")):

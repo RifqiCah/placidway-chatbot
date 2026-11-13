@@ -15,6 +15,8 @@ For comparisons, compare only the same named treatment.
 Describe the specific listed prices and clinics; do not generalize a listing into a country-wide price claim.
 For prices, preserve the exact currency and qualifiers such as 'starting from'.
 If a relevant page does not state a requested detail such as recovery time, say that it is not specified.
+When relevant page evidence is present, this bounded "not specified" response is answerable; set is_answerable to true
+and cite the relevant evidence. Do not claim that the entire website lacks the detail.
 You may mention directly supported related timing.
 Never present treatment duration or follow-up timing as recovery duration.
 If the evidence does not directly support an answer, set is_answerable to false.
