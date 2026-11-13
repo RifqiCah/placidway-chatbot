@@ -31,7 +31,7 @@ class ExtractiveFallback:
 
         if "recovery" in lowered or "pemulihan" in lowered:
             matching = [
-                line.strip()
+                re.sub(r"^\d+\.\s*Why is the treatment period three weeks\?\s*", "", line.strip(), flags=re.I)
                 for line in evidence.splitlines()
                 if any(
                     term in line.casefold()
@@ -42,7 +42,9 @@ class ExtractiveFallback:
             details = list(dict.fromkeys(matching[:2]))
             if details:
                 return FallbackAnswer(
-                    "The page does not state a specific recovery duration. It does state: " + " ".join(details),
+                    "The page does not state a specific recovery duration. It does state: "
+                    + " ".join(details)
+                    + " These are treatment or follow-up timings, not a guaranteed recovery time.",
                     self._passages_containing(details, results) or default_passages,
                 )
             return FallbackAnswer("", (), is_answerable=False)

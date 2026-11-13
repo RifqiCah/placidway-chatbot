@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from backend.app.application.ports.answer_generator import FallbackAnswerPort
@@ -47,6 +48,10 @@ class AnswerQuestionUseCase:
 
         if generated is not None:
             if not generated.is_answerable:
+                if self._should_try_fallback_after_llm_refusal(question):
+                    fallback_answer = self._fallback_answer(question, results, disclaimer)
+                    if fallback_answer is not None:
+                        return fallback_answer
                 return self._unknown(question, "llm_marked_unanswerable", AnswerMode.LLM)
             cited = tuple(evidence[index - 1] for index in generated.source_indices)
             return ChatAnswer(
@@ -57,9 +62,20 @@ class AnswerQuestionUseCase:
                 disclaimer=disclaimer,
             )
 
+        fallback_answer = self._fallback_answer(question, results, disclaimer)
+        if fallback_answer is not None:
+            return fallback_answer
+        return self._unknown(question, "extractive_answer_not_found")
+
+    def _fallback_answer(
+        self,
+        question: str,
+        results: tuple[SearchResult, ...],
+        disclaimer: str | None,
+    ) -> ChatAnswer | None:
         fallback = self.fallback.generate(question, results)
         if not fallback.is_answerable or not fallback.used_passages:
-            return self._unknown(question, "extractive_answer_not_found")
+            return None
         return ChatAnswer(
             answer=fallback.answer,
             citations=self._citations(fallback.used_passages),
@@ -70,8 +86,27 @@ class AnswerQuestionUseCase:
 
     @staticmethod
     def _is_follow_up(text: str) -> bool:
-        signals = ("what about", "and ", "how about", "recovery", "there", "that", "bagaimana", "kalau", "lalu")
-        return len(text.casefold().split()) <= 10 or any(text.casefold().startswith(signal) for signal in signals)
+        normalized = " ".join(text.casefold().split())
+        prefixes = (
+            "what about",
+            "and what about",
+            "and how about",
+            "how about",
+            "recovery time",
+            "what is its",
+            "what's its",
+            "does it",
+            "is it",
+            "can it",
+            "bagaimana dengan",
+            "dan bagaimana",
+            "berapa lama pemulihan",
+            "kalau",
+            "lalu",
+        )
+        if normalized.startswith(prefixes):
+            return True
+        return bool(re.search(r"\b(its|that|those|same treatment|same package|this package)\b", normalized))
 
     @classmethod
     def _retrieval_query(cls, messages: tuple[ChatMessage, ...]) -> str:
@@ -80,6 +115,11 @@ class AnswerQuestionUseCase:
             return latest
         previous = [message.content for message in messages[:-1] if message.role == "user"][-2:]
         return " ".join([*previous, latest])
+
+    @staticmethod
+    def _should_try_fallback_after_llm_refusal(question: str) -> bool:
+        lowered = question.casefold()
+        return "recovery" in lowered or "pemulihan" in lowered
 
     @staticmethod
     def _has_sufficient_evidence(results: tuple[SearchResult, ...], query: str) -> bool:
